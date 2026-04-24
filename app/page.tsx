@@ -1,9 +1,34 @@
 "use client";
 import { useState } from "react";
 
+interface HierarchyNode {
+  [key: string]: HierarchyNode;
+}
+
+interface Hierarchy {
+  root: string;
+  tree: HierarchyNode;
+  depth?: number;
+  has_cycle?: boolean;
+}
+
+interface ApiResult {
+  user_id: string;
+  email_id: string;
+  college_roll_number: string;
+  hierarchies: Hierarchy[];
+  invalid_entries: string[];
+  duplicate_edges: string[];
+  summary: {
+    total_trees: number;
+    total_cycles: number;
+    largest_tree_root: string;
+  };
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState<ApiResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -28,7 +53,7 @@ export default function Home() {
     }
   }
 
-  function renderTree(obj: Record<string, unknown>, indent = 0) {
+  function renderTree(obj: HierarchyNode, indent = 0): React.ReactNode {
     return Object.entries(obj).map(([key, val]) => (
       <div key={key} style={{ marginLeft: indent * 20 }}>
         <span className="text-green-400 font-bold">📦 {key}</span>
@@ -41,7 +66,6 @@ export default function Home() {
     <main className="min-h-screen bg-gray-950 text-white p-8">
       <div className="max-w-4xl mx-auto">
 
-        {/* Header */}
         <div className="text-center mb-10">
           <h1 className="text-4xl font-extrabold text-blue-400 mb-2">
             🌳 BFHL Tree Visualizer
@@ -49,7 +73,6 @@ export default function Home() {
           <p className="text-gray-400">SRM Full Stack Challenge — Round 1</p>
         </div>
 
-        {/* Input */}
         <div className="bg-gray-900 rounded-2xl p-6 mb-6 shadow-lg">
           <label className="block text-sm text-gray-400 mb-2 font-semibold">
             Enter node edges (comma separated)
@@ -70,18 +93,14 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Error */}
         {error && (
           <div className="bg-red-900 border border-red-500 text-red-200 rounded-xl p-4 mb-6">
             {error}
           </div>
         )}
 
-        {/* Results */}
         {result && (
           <div className="space-y-6">
-
-            {/* Identity */}
             <div className="bg-gray-900 rounded-2xl p-6 shadow-lg">
               <h2 className="text-blue-400 font-bold text-lg mb-3">👤 Identity</h2>
               <div className="grid grid-cols-3 gap-4 text-sm">
@@ -100,7 +119,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Summary */}
             <div className="bg-gray-900 rounded-2xl p-6 shadow-lg">
               <h2 className="text-blue-400 font-bold text-lg mb-3">📊 Summary</h2>
               <div className="grid grid-cols-3 gap-4 text-sm">
@@ -119,7 +137,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Hierarchies */}
             <div className="bg-gray-900 rounded-2xl p-6 shadow-lg">
               <h2 className="text-blue-400 font-bold text-lg mb-4">🌲 Hierarchies</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -142,7 +159,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Invalid + Duplicates */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-gray-900 rounded-2xl p-6 shadow-lg">
                 <h2 className="text-red-400 font-bold text-lg mb-3">❌ Invalid Entries</h2>
@@ -163,7 +179,6 @@ export default function Home() {
                 }
               </div>
             </div>
-
           </div>
         )}
       </div>
