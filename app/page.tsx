@@ -28,7 +28,7 @@ export default function Home() {
     }
   }
 
-  function renderTree(obj, indent = 0) {
+  function renderTree(obj: Record<string, unknown>, indent = 0) {
     return Object.entries(obj).map(([key, val]) => (
       <div key={key} style={{ marginLeft: indent * 20 }}>
         <span className="text-green-400 font-bold">📦 {key}</span>
