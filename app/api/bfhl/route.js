@@ -1,186 +1,234 @@
-import { NextResponse } from "next/server";
+export async function POST(req) {
+  // CORS headers
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  };
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function isValid(entry) {
-    const trimmed = entry.trim();
-    const re = /^[A-Z]->[A-Z]$/;
-    return re.test(trimmed);
-}
-
-function buildGraph(edges) {
-    // adjacency list + parent tracker
-    const children = {};   // node -> [child, ...]
-    const parentOf = {};   // child -> first parent
-    const allNodes = new Set();
-
-    for (const edge of edges) {
-        const [p, c] = edge.split("->");
-        allNodes.add(p);
-        allNodes.add(c);
-        if (!children[p]) children[p] = [];
-        // first-parent-wins
-        if (parentOf[c] === undefined) {
-            parentOf[c] = p;
-            children[p].push(c);
-        }
-        // if already has a parent, silently discard
-    }
-    return { children, parentOf, allNodes };
-}
-
-function detectCycle(node, children, visited, recStack) {
-    visited.add(node);
-    recStack.add(node);
-    for (const child of (children[node] || [])) {
-        if (!visited.has(child)) {
-            if (detectCycle(child, children, visited, recStack)) return true;
-        } else if (recStack.has(child)) {
-            return true;
-        }
-    }
-    recStack.delete(node);
-    return false;
-}
-
-function buildTree(node, children) {
-    const obj = {};
-    for (const child of (children[node] || [])) {
-        obj[child] = buildTree(child, children);
-    }
-    return { [node]: obj };
-}
-
-function getDepth(node, children) {
-    if (!children[node] || children[node].length === 0) return 1;
-    return 1 + Math.max(...children[node].map(c => getDepth(c, children)));
-}
-
-// ── main handler ─────────────────────────────────────────────────────────────
-
-export async function POST(request) {
-    const body = await request.json();
+  try {
+    const body = await req.json();
     const data = body.data || [];
 
     const invalid_entries = [];
-    const duplicate_edges = [];
-    const seenEdges = new Set();
     const validEdges = [];
+    
+    // 1. Validation
+    for (const item of data) {
+      // Rule: trim whitespace first, then validate
+      const entry = typeof item === 'string' ? item.trim() : String(item).trim();
+      
+      if (!/^[A-Z]->[A-Z]$/.test(entry)) {
+        invalid_entries.push(entry);
+        continue;
+      }
+      
+      const [parent, child] = entry.split('->');
+      // Check for self loops
+      if (parent === child) {
+        invalid_entries.push(entry);
+        continue;
+      }
 
-    // 1. validate + deduplicate
-    for (const entry of data) {
-        const trimmed = entry.trim();
-        if (!isValid(trimmed)) {
-            invalid_entries.push(trimmed === entry ? entry : entry); // push original
-            continue;
-        }
-        if (seenEdges.has(trimmed)) {
-            if (!duplicate_edges.includes(trimmed)) {
-                duplicate_edges.push(trimmed);
-            }
-        } else {
-            seenEdges.add(trimmed);
-            validEdges.push(trimmed);
-        }
+      validEdges.push(entry);
     }
 
-    // 2. build graph
-    const { children, parentOf, allNodes } = buildGraph(validEdges);
+    // 2. Duplicate Edges processing
+    const seenEdges = new Set();
+    const duplicateEdgesSet = new Set();
+    const duplicate_edges = [];
+    const uniqueEdges = []; // First occurrences only for tree building
 
-    // 3. find connected groups using union-find style grouping
-    // group nodes into trees by finding roots
-    const roots = [...allNodes].filter(n => parentOf[n] === undefined);
-
-    // find all nodes reachable from each root
-    function getGroup(root) {
-        const group = new Set();
-        const stack = [root];
-        while (stack.length) {
-            const n = stack.pop();
-            if (group.has(n)) continue;
-            group.add(n);
-            for (const c of (children[n] || [])) stack.push(c);
+    for (const edge of validEdges) {
+      if (seenEdges.has(edge)) {
+        if (!duplicateEdgesSet.has(edge)) {
+          duplicateEdgesSet.add(edge);
+          duplicate_edges.push(edge);
         }
-        return group;
+      } else {
+        seenEdges.add(edge);
+        uniqueEdges.push(edge);
+      }
     }
 
-    const visited_nodes = new Set();
+    // 3. Tree Construction (handle multi-parent by accepting first encountered silently)
+    const parentOf = {};
+    const childrenOf = {};
+    const allNodes = new Set();
+    
+    for (const edge of uniqueEdges) {
+      const [parent, child] = edge.split('->');
+      allNodes.add(parent);
+      allNodes.add(child);
+      
+      if (parentOf[child]) {
+        // Node already has a parent, discard second silently
+        continue; 
+      }
+      
+      parentOf[child] = parent;
+      if (!childrenOf[parent]) {
+        childrenOf[parent] = [];
+      }
+      childrenOf[parent].push(child);
+    }
+    
+    // Sort children for predictable JSON structure (optional but nicely matches examples)
+    for (const parent in childrenOf) {
+      childrenOf[parent].sort();
+    }
+
+    // 4. Find roots (nodes strictly with no parent)
+    const roots = [];
+    for (const node of allNodes) {
+      if (!parentOf[node]) {
+        roots.push(node);
+      }
+    }
+    
+    // 5. Discover pure isolated cycles
+    const visited = new Set();
+    // Traverse from all valid roots to find reachable nodes
+    for (const root of roots) {
+      const q = [root];
+      while (q.length > 0) {
+        const curr = q.shift();
+        visited.add(curr);
+        if (childrenOf[curr]) {
+          for (const child of childrenOf[curr]) {
+            q.push(child);
+          }
+        }
+      }
+    }
+
+    // The unvisited nodes inherently form pure cycles mathematically (every node has exactly 1 parent in this sub-graph)
+    const unvisitedNodesList = Array.from(allNodes).filter(n => !visited.has(n));
+    const unvisitedNodes = new Set(unvisitedNodesList);
+    const cycles = [];
+
+    while (unvisitedNodes.size > 0) {
+      const startNode = unvisitedNodes.values().next().value;
+      let curr = startNode;
+      const path = [];
+      const pathSet = new Set();
+
+      while (!pathSet.has(curr) && unvisitedNodes.has(curr)) {
+        path.push(curr);
+        pathSet.add(curr);
+        unvisitedNodes.delete(curr);
+        curr = parentOf[curr];
+      }
+
+      if (pathSet.has(curr)) {
+        // We hit the cycle itself
+        const cycleStartIndex = path.indexOf(curr);
+        const cycleNodes = path.slice(cycleStartIndex);
+        // Find lexicographically smallest node in the cycle
+        cycleNodes.sort();
+        cycles.push(cycleNodes[0]);
+      }
+    }
+
+    // 6. Build the expected hierarchies and summaries
     const hierarchies = [];
+    let total_trees = 0;
+    let total_cycles = 0;
+    let largest_tree_root = null;
+    let max_depth = 0;
 
-    // process rooted groups
-    for (const root of roots.sort()) {
-        const group = getGroup(root);
-        group.forEach(n => visited_nodes.add(n));
-
-        // cycle detection within group
-        const vis = new Set();
-        const rec = new Set();
-        let hasCycle = false;
-        for (const n of group) {
-            if (!vis.has(n)) {
-                if (detectCycle(n, children, vis, rec)) { hasCycle = true; break; }
-            }
-        }
-
-        if (hasCycle) {
-            hierarchies.push({ root, tree: {}, has_cycle: true });
-        } else {
-            const tree = buildTree(root, children);
-            const depth = getDepth(root, children);
-            hierarchies.push({ root, tree, depth });
-        }
+    function buildTreeObj(node) {
+      const obj = {};
+      const children = childrenOf[node] || [];
+      for (const child of children) {
+        obj[child] = buildTreeObj(child);
+      }
+      return obj;
     }
 
-    // handle pure cycles (nodes never seen as roots)
-    const unvisited = [...allNodes].filter(n => !visited_nodes.has(n));
-    if (unvisited.length > 0) {
-        // group them
-        const cycleVisited = new Set();
-        for (const node of unvisited.sort()) {
-            if (cycleVisited.has(node)) continue;
-            const group = getGroup(node);
-            group.forEach(n => cycleVisited.add(n));
-            const cycleRoot = [...group].sort()[0];
-            hierarchies.push({ root: cycleRoot, tree: {}, has_cycle: true });
-        }
+    function getDepth(node) {
+      const children = childrenOf[node] || [];
+      if (children.length === 0) return 1;
+      let maxChildDepth = 0;
+      for (const child of children) {
+        maxChildDepth = Math.max(maxChildDepth, getDepth(child));
+      }
+      return 1 + maxChildDepth;
     }
 
-    // 4. summary
-    const trees = hierarchies.filter(h => !h.has_cycle);
-    const total_trees = trees.length;
-    const total_cycles = hierarchies.filter(h => h.has_cycle).length;
-
-    let largest_tree_root = "";
-    let maxDepth = -1;
-    for (const t of trees) {
-        if (t.depth > maxDepth || (t.depth === maxDepth && t.root < largest_tree_root)) {
-            maxDepth = t.depth;
-            largest_tree_root = t.root;
+    // Process valid non-cyclic trees
+    for (const root of roots) {
+      const depth = getDepth(root);
+      hierarchies.push({
+        root: root,
+        tree: { [root]: buildTreeObj(root) },
+        depth: depth
+      });
+      total_trees++;
+      
+      if (depth > max_depth) {
+        max_depth = depth;
+        largest_tree_root = root;
+      } else if (depth === max_depth) {
+        if (!largest_tree_root || root < largest_tree_root) {
+          largest_tree_root = root;
         }
+      }
     }
 
-    const response = {
-        user_id: "ANJUL_09062004",
-        email_id: "as5067@srmist.edu.in",
-        college_roll_number: "RA2311026010572",
-        hierarchies,
-        invalid_entries,
-        duplicate_edges,
-        summary: { total_trees, total_cycles, largest_tree_root },
+    // Process pure cyclic groups
+    for (const cycle of cycles) {
+      hierarchies.push({
+        root: cycle,
+        tree: {},
+        has_cycle: true
+      });
+      total_cycles++;
+    }
+
+    // Result compilation
+    const responseObj = {
+      user_id: "ANJUL_09062004",
+      email_id: "as5067@srmist.edu.in",
+      college_roll_number: "RA2311026010572",
+      hierarchies,
+      invalid_entries,
+      duplicate_edges,
+      summary: {
+        total_trees,
+        total_cycles,
+        largest_tree_root
+      }
     };
 
-    return NextResponse.json(response, {
-        headers: { "Access-Control-Allow-Origin": "*" },
+    return new Response(JSON.stringify(responseObj), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      }
     });
+
+  } catch (error) {
+    return new Response(JSON.stringify({ error: "Invalid request format" }), {
+      status: 400,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      }
+    });
+  }
 }
 
+// OPTIONS preflight request handler for CORS
 export async function OPTIONS() {
-    return new NextResponse(null, {
-        status: 204,
-        headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        },
-    });
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  };
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders
+  });
 }
